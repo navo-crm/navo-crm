@@ -36,7 +36,14 @@ async function load(){
     console.warn('場次排序載入失敗，改用基本欄位載入',e);
     trips=await api('/rest/v1/trips?select=id,name');
   }
-  purchases=await api('/rest/v1/purchases?select=*,customers(name),trips(name)&order=purchase_date.desc,created_at.desc');
+  purchases=await api('/rest/v1/purchases?select=*,customers(name),trips(id,name)&order=purchase_date.desc,created_at.desc');
+  // 某些 Supabase 關聯回傳可能沒有帶出 nested trips/customers，
+  // 這裡用 trip_id / customer_id 補回名稱，避免消費紀錄顯示「未指定」。
+  purchases=purchases.map(p=>({
+    ...p,
+    trips:p.trips||trips.find(t=>t.id===p.trip_id)||null,
+    customers:p.customers||customers.find(c=>c.id===p.customer_id)||null
+  }));
   render()
 }
 async function login(){const e=$('email').value.trim(),p=$('password').value;if(!e||!p)return msg('authMsg','請輸入 Email 與密碼');const b=$('loginBtn');b.disabled=true;b.textContent='登入中…';msg('authMsg','正在連線到 NAVO 雲端資料庫…');try{let r;try{r=await api('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email:e,password:p})})}catch(signErr){if(!/invalid login credentials|email not confirmed/i.test(signErr.message))throw signErr;try{r=await api('/auth/v1/signup',{method:'POST',body:JSON.stringify({email:e,password:p})})}catch(signupErr){throw new Error('登入失敗：'+signErr.message+'\n建立帳號也失敗：'+signupErr.message)}if(!r?.access_token){msg('authMsg','帳號已建立，但目前需要 Email 驗證。請到信箱點擊確認信，再回到 NAVO 用同一組帳密登入。');return}}if(!r?.access_token)throw new Error('沒有取得登入憑證，請重新整理後再試');accessToken=r.access_token;uid=decodeJwt(accessToken).sub||'';if(!uid)throw new Error('登入成功但無法取得使用者 ID');localStorage.setItem('nvo_access_token',accessToken);localStorage.setItem('nvo_uid',uid);msg('authMsg','',false);await load();show('home')}catch(e){console.error(e);msg('authMsg','登入失敗：'+e.message)}finally{b.disabled=false;b.textContent='登入／建立帳號'}}
@@ -92,7 +99,32 @@ async function copySelectedNotify(){const checks=[...document.querySelectorAll('
 function countrySpendLabel(country,n){return `🇯🇵🇰🇷🇹🇭🇭🇰`.includes(country)?`${country}消費 ${money(n)}`:`${country}消費 ${money(n)}`}
 function openAssistantNotify(country){const list=notificationCandidates(country);renderAssistantPeople(list,`📣 ${country} 主要通知客戶`,`${list.length} 人`,country,false)}
 async function newTrip(){if(!uid)return alert('目前尚未登入');const country=(prompt('代購國家：日本／韓國／泰國／香港／其他','韓國')||'').trim();if(!country)return;const valid=['日本','韓國','泰國','香港','其他'];if(!valid.includes(country))return alert('國家請輸入：日本、韓國、泰國、香港或其他');const name=(prompt('代購趟次名稱，例如：2026/11 首爾','2026/11 首爾')||'').trim();if(!name)return;const start=(prompt('開始日期 YYYY-MM-DD（可留白）','')||'').trim();const end=(prompt('結束日期 YYYY-MM-DD（可留白）',start||'')||'').trim();if(start&&!/^\d{4}-\d{2}-\d{2}$/.test(start))return alert('開始日期格式請用 YYYY-MM-DD');if(end&&!/^\d{4}-\d{2}-\d{2}$/.test(end))return alert('結束日期格式請用 YYYY-MM-DD');if(start&&end&&end<start)return alert('結束日期不能早於開始日期');const flags={日本:'🇯🇵',韓國:'🇰🇷',泰國:'🇹🇭',香港:'🇭🇰',其他:'🌏'};const body={user_id:uid,name:`${flags[country]} ${country}｜${name}`};if(start)body.start_date=start;if(end)body.end_date=end;try{await api('/rest/v1/trips',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify(body)});await load();show('trips')}catch(e){alert('新增場次失敗：'+e.message)}}
-function editTrip(id){const t=trips.find(x=>x.id===id);if(!t)return;const oldCountry=tripCountry(t)||'其他';const country=prompt('代購國家：日本／韓國／泰國／香港／其他',oldCountry);if(!country)return;const name=prompt('代購趟次名稱', (t.name||'').replace(/^(?:🇯🇵|🇰🇷|🇹🇭|🇭🇰|🌏)\s*(?:日本|韓國|泰國|香港|其他)｜/,'').trim());if(!name?.trim())return;const valid=['日本','韓國','泰國','香港','其他'];if(!valid.includes(country.trim()))return alert('國家格式不正確');const flags={日本:'🇯🇵',韓國:'🇰🇷',泰國:'🇹🇭',香港:'🇭🇰',其他:'🌏'};api('/rest/v1/trips?id=eq.'+encodeURIComponent(id),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({name:`${flags[country.trim()]} ${country.trim()}｜${name.trim()}`})}).then(load).catch(e=>alert('更新場次失敗：'+e.message))}
+async function editTrip(id){
+  const t=trips.find(x=>x.id===id);
+  if(!t)return;
+  const valid=['日本','韓國','泰國','香港','其他'];
+  const oldCountry=tripCountry(t)||'其他';
+  const country=(prompt('代購國家：日本／韓國／泰國／香港／其他',oldCountry)||'').trim();
+  if(!country)return;
+  if(!valid.includes(country))return alert('國家格式不正確');
+  const prefix=/^(?:🇯🇵|🇰🇷|🇹🇭|🇭🇰|🌏)\s*(?:日本|韓國|泰國|香港|其他)｜/;
+  const oldName=String(t.name||'').replace(prefix,'').trim();
+  const name=(prompt('代購趟次名稱',oldName)||'').trim();
+  if(!name)return;
+  const start=(prompt('開始日期 YYYY-MM-DD',t.start_date||'')||'').trim();
+  const end=(prompt('結束日期 YYYY-MM-DD',t.end_date||start||'')||'').trim();
+  if(start&&!/^\d{4}-\d{2}-\d{2}$/.test(start))return alert('開始日期格式請用 YYYY-MM-DD');
+  if(end&&!/^\d{4}-\d{2}-\d{2}$/.test(end))return alert('結束日期格式請用 YYYY-MM-DD');
+  if(start&&end&&end<start)return alert('結束日期不能早於開始日期');
+  const flags={日本:'🇯🇵',韓國:'🇰🇷',泰國:'🇹🇭',香港:'🇭🇰',其他:'🌏'};
+  const body={name:`${flags[country]} ${country}｜${name}`};
+  body.start_date=start||null; body.end_date=end||null;
+  try{
+    await api('/rest/v1/trips?id=eq.'+encodeURIComponent(id),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify(body)});
+    await load();
+    show('trips');
+  }catch(e){alert('更新場次失敗：'+e.message)}
+}
 async function deleteTrip(id){const t=trips.find(x=>x.id===id);if(!t)return;const used=purchases.some(p=>p.trip_id===id);const message=used?'這個場次已有消費紀錄。刪除場次後，這些消費會失去場次關聯，但消費紀錄本身不會刪除。\n\n確定刪除？':'確定刪除這個代購場次？';if(!confirm(message))return;try{await api('/rest/v1/trips?id=eq.'+encodeURIComponent(id),{method:'DELETE',headers:{Prefer:'return=minimal'}});await load();show('trips')}catch(e){alert('刪除場次失敗：'+e.message)}}
 function categoriesOf(v){return String(v||'').split(/[、,，\|]/).map(x=>x.trim()).filter(Boolean)}
 function categoryValue(){return [...document.querySelectorAll('#category input[type=checkbox]:checked')].map(x=>x.value).join('、')}
