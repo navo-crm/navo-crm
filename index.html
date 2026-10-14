@@ -24,6 +24,7 @@ let accessToken=localStorage.getItem('nvo_access_token')||localStorage.getItem('
 let uid=localStorage.getItem('nvo_uid')||'';
 let customers=[],trips=[],purchases=[],lineMembers=[],lineMembersLoadError='',selected='',editingPurchaseId='',editingCustomerId='';
 const $=id=>document.getElementById(id), money=n=>'$'+Math.round(Number(n)||0).toLocaleString();
+function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function msg(id,text,show=true){const e=$(id);if(!e)return;e.textContent=text;e.style.display=show?'block':'none'}
 function show(id){document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));const t=$(id);if(t)t.classList.add('on');document.querySelectorAll('.bottom button').forEach(x=>x.classList.toggle('on',x.dataset.v===id));window.scrollTo({top:0,left:0,behavior:'auto'});requestAnimationFrame(()=>window.scrollTo({top:0,left:0,behavior:'auto'}));if(uid)render()}
 function headers(json=false){const h={'apikey':KEY,'Authorization':'Bearer '+accessToken};if(json)h['Content-Type']='application/json';return h}
